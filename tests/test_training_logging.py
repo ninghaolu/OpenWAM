@@ -407,3 +407,41 @@ def test_wandb_project_defaults_to_dataset_and_workload_bin(tmp_path: Path) -> N
 
     assert build_default_wandb_project(metadata) == "openwam-robotwin-policy-train"
     assert resolve_wandb_project(config, metadata) == "openwam-robotwin-policy-train"
+
+
+def test_full_jsonl_volume_does_not_block_other_log_sinks(tmp_path):
+    import errno
+    from unittest.mock import Mock
+    import pytest
+
+    for error_number in (errno.ENOSPC, errno.EDQUOT):
+        sink = logging_module.JsonlLogSink(tmp_path / f"metrics-{error_number}.jsonl")
+        sink._handle.close()
+        handle = Mock()
+        handle.flush.side_effect = OSError(error_number, "storage exhausted")
+        handle.close.side_effect = OSError(error_number, "storage exhausted")
+        sink._handle = handle
+        other = Mock()
+        composite = logging_module.CompositeLogSink([sink, other])
+        with pytest.warns(RuntimeWarning, match="JSONL logging disabled"):
+            composite.log_metrics(step=10, phase="train", metrics={"loss": 0.2})
+        composite.log_event(name="checkpoint_saved", payload={"step": 10})
+        composite.log_metrics(step=11, phase="train", metrics={"loss": 0.1})
+        composite.close()
+        assert other.log_metrics.call_count == 2
+        other.log_event.assert_called_once()
+        other.close.assert_called_once()
+        assert handle.write.call_count == 1
+
+
+def test_jsonl_unrelated_io_errors_are_not_suppressed(tmp_path):
+    import errno
+    from unittest.mock import Mock
+    import pytest
+
+    sink = logging_module.JsonlLogSink(tmp_path / "metrics.jsonl")
+    sink._handle.close()
+    sink._handle = Mock()
+    sink._handle.write.side_effect = OSError(errno.EIO, "device error")
+    with pytest.raises(OSError, match="device error"):
+        sink.log_metrics(step=1, phase="train", metrics={"loss": 1.0})

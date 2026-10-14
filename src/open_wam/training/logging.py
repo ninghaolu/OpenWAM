@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
+import warnings
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -77,16 +79,38 @@ class JsonlLogSink:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = self.path.open("a", encoding="utf-8")
 
+    def _write(self, payload: dict[str, Any]) -> None:
+        if self._handle is None:
+            return
+        try:
+            self._handle.write(json.dumps(payload, default=str) + "\n")
+            self._handle.flush()
+        except OSError as error:
+            if error.errno not in {errno.ENOSPC, errno.EDQUOT}:
+                raise
+            # JSONL is a secondary log. Preserve console/W&B logging and
+            # training when this volume runs out of space; never hide the loss.
+            handle, self._handle = self._handle, None
+            try:
+                handle.close()
+            except OSError:
+                pass
+            warnings.warn(
+                f"JSONL logging disabled for {self.path}: {error}. "
+                "Other log sinks remain active; check available disk space.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
     def log_metrics(self, *, step: int, phase: str, metrics: dict[str, float]) -> None:
-        self._handle.write(json.dumps({"type": "metrics", "step": step, "phase": phase, "metrics": metrics}) + "\n")
-        self._handle.flush()
+        self._write({"type": "metrics", "step": step, "phase": phase, "metrics": metrics})
 
     def log_event(self, *, name: str, payload: dict[str, Any]) -> None:
-        self._handle.write(json.dumps({"type": "event", "name": name, "payload": payload}, default=str) + "\n")
-        self._handle.flush()
+        self._write({"type": "event", "name": name, "payload": payload})
 
     def close(self) -> None:
-        self._handle.close()
+        if self._handle is not None:
+            self._handle.close()
 
 
 class WandBLogSink:

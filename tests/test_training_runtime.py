@@ -2399,3 +2399,39 @@ def test_composable_runtime_ddp_strategy_degrades_cleanly_to_single_process(
     final_state = runtime.run()
 
     assert final_state.optimizer_step == 1
+
+
+@pytest.mark.parametrize("drop_last", [False, True])
+def test_resume_loader_skips_indices_without_loading_old_samples(drop_last: bool) -> None:
+    class RecordingDataset(Dataset):
+        def __init__(self):
+            self.reads = []
+
+        def __len__(self):
+            return 11
+
+        def __getitem__(self, index):
+            self.reads.append(index)
+            return index
+
+    dataset = RecordingDataset()
+    sampler = DistributedSampler(dataset, num_replicas=1, rank=0, seed=7)
+    sampler.set_epoch(3)
+    order = list(sampler)
+    loader = DataLoader(dataset, batch_size=2, sampler=sampler, drop_last=drop_last)
+    original_length = len(loader)
+    batches = list(data_loading_module.iter_loader_from_batch(loader, 2))
+    expected = order[4:10 if drop_last else 11]
+    assert dataset.reads == expected
+    assert [i for i, _ in batches] == list(range(2, original_length))
+    assert torch.cat([batch for _, batch in batches]).tolist() == expected
+    assert len(loader) == original_length
+    dataset.reads.clear()
+    list(data_loading_module.iter_loader_from_batch(loader, 0))
+    assert dataset.reads == order[:10 if drop_last else 11]
+
+
+def test_resume_loader_preserves_generic_iterable_fallback() -> None:
+    assert list(data_loading_module.iter_loader_from_batch(range(5), 2)) == [
+        (2, 2), (3, 3), (4, 4)
+    ]

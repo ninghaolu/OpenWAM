@@ -103,6 +103,8 @@ class ViewBatchAdapter:
                 metadata=batch.metadata,
                 condition_latents=getattr(batch, "condition_latents", None),
                 video_latents=video_latents,
+                proprio_context_frames=batch.proprio_context_frames,
+                proprio_context_frames_mask=batch.proprio_context_frames_mask,
             ),
         )
 

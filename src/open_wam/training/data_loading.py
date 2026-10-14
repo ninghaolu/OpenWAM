@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from collections.abc import Iterable, Iterator
+from itertools import islice
+
+from torch.utils.data import DataLoader, IterableDataset, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 
 from open_wam.configs import (
@@ -265,3 +268,25 @@ def _validate_dynamics_source_sampling(config: ExperimentConfig) -> None:
             "active `data.dynamics_routing.routes` because the dynamics router "
             "owns source sampling and only preserves parity for uniform replacement draws."
         )
+
+
+def iter_loader_from_batch(
+    loader: Iterable[object], start_batch: int
+) -> Iterator[tuple[int, object]]:
+    """Resume standard map-style loaders without decoding discarded batches.
+
+    Keep the original loader and its length intact for epoch/cursor accounting.
+    Custom and iterable loaders retain their existing iteration semantics.
+    This preserves sampler order, not worker-local random augmentation state.
+    """
+    start_batch = max(0, int(start_batch))
+    if (
+        start_batch > 0
+        and type(loader) is DataLoader
+        and not isinstance(loader.dataset, IterableDataset)
+        and loader.batch_sampler is not None
+    ):
+        from accelerate import skip_first_batches
+
+        return enumerate(skip_first_batches(loader, start_batch), start=start_batch)
+    return enumerate(islice(loader, start_batch, None), start=start_batch)

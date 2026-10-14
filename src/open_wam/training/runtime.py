@@ -33,6 +33,7 @@ from .data_loading import (
     _uses_dynamics_routing,
     _validate_dynamics_source_sampling,
     build_runtime_dataloaders,
+    iter_loader_from_batch,
     preflight_runtime_dataset_artifacts,
 )
 from .launch import DistributedLaunchContext, validate_training_launch
@@ -388,9 +389,9 @@ class TrainingRuntime:
                         "seen_batches": self.train_state.seen_batches,
                     },
                 )
-            for batch_idx, batch in enumerate(self.train_loader):
-                if batch_idx < resume_batch_idx:
-                    continue
+            for batch_idx, batch in iter_loader_from_batch(
+                self.train_loader, resume_batch_idx
+            ):
                 if (
                     policy.limit_train_batches is not None
                     and batch_idx >= policy.limit_train_batches
@@ -440,9 +441,9 @@ class TrainingRuntime:
                     },
                 )
             saw_batch = False
-            for batch_idx, batch in enumerate(self.train_loader):
-                if batch_idx < resume_batch_idx:
-                    continue
+            for batch_idx, batch in iter_loader_from_batch(
+                self.train_loader, resume_batch_idx
+            ):
                 if (
                     policy.limit_train_batches is not None
                     and batch_idx >= policy.limit_train_batches

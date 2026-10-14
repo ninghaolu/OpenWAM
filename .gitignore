@@ -8,6 +8,7 @@ configs/artifacts.yaml
 
 # Runtime logs written at the repo root by some scripts.
 Log/
+logs/
 *.log
 openwam_crash_*.log
 

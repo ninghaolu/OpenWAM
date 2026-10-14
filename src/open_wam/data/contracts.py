@@ -37,6 +37,9 @@ class WAMSample:
     state_mask: torch.Tensor | None = None
     task_text: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Optional state aligned to model-visible (post-VAE) frames, not RGB frames.
+    proprio_context_frames: torch.Tensor | None = None
+    proprio_context_frames_mask: torch.Tensor | None = None
 
 
 @dataclass
@@ -55,6 +58,9 @@ class WAMBatch:
     state_mask: torch.Tensor | None = None
     task_text: tuple[str | None, ...] | None = None
     metadata: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    # Optional state aligned to model-visible (post-VAE) frames, not RGB frames.
+    proprio_context_frames: torch.Tensor | None = None
+    proprio_context_frames_mask: torch.Tensor | None = None
 
 
 def collate_wam_samples(samples: list[WAMSample]) -> WAMBatch:
@@ -86,6 +92,8 @@ def collate_wam_samples(samples: list[WAMSample]) -> WAMBatch:
         state_mask=state_mask,
         task_text=task_text,
         metadata=metadata,
+        proprio_context_frames=_stack_optional_tensor(samples, "proprio_context_frames"),
+        proprio_context_frames_mask=_stack_optional_tensor(samples, "proprio_context_frames_mask"),
     )
 
 
@@ -100,6 +108,14 @@ def move_wam_batch_to_device(batch: WAMBatch, device: torch.device | str) -> WAM
         state_mask=batch.state_mask.to(device) if batch.state_mask is not None else None,
         task_text=batch.task_text,
         metadata=batch.metadata,
+        proprio_context_frames=(
+            batch.proprio_context_frames.to(device)
+            if batch.proprio_context_frames is not None else None
+        ),
+        proprio_context_frames_mask=(
+            batch.proprio_context_frames_mask.to(device)
+            if batch.proprio_context_frames_mask is not None else None
+        ),
     )
 
 

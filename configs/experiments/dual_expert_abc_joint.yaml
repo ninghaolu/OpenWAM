@@ -1,0 +1,177 @@
+name: dual_expert_abc_joint
+
+# ABC-130k full fine-tuning, adapted from the validated LIBERO dual-expert
+# joint recipe (configs/experiments/dual_expert_libero_joint.yaml) per
+# /home/alex/policy-finetuning/openwam_abc_finetuning.md. Only data geometry
+# (14-D action/state, 3-camera layout, ABC's raw-RGB `abc_v3` adapter) and the
+# batch adapter (`views`, not `latents` -- abc_v3 is a raw/online-VAE adapter,
+# not a pre-encoded latent one) differ from that baseline. v1 sampling uses a
+# fixed K=4 chunk window (see abc_open_wam/dataset.py) rather than the design
+# doc's randomized K in [1,4]; the geometry below (chunk_size=4, action
+# schema, action_target) already assumes exactly 4 fixed chunks.
+#
+# Requires `--extension abc_open_wam` on the training command line to
+# register `dataset_type: abc_v3` (see abc_open_wam/extension.py).
+
+data:
+  dataset_name: abc_130k_v3
+  dataset_type: abc_v3
+  local_root: "${paths.datasets.abc_root}"
+  val_local_root: "${paths.datasets.abc_val_root}"
+  split: train
+  camera_names: [observation.images.top, observation.images.left_wrist, observation.images.right_wrist]
+  latent_camera_names: [observation.images.top, observation.images.left_wrist, observation.images.right_wrist]
+  # Three 224x224 source views tiled left-to-right into one canonical canvas;
+  # canonical compositing/resizing is shared infra (open_wam.data.raw_video),
+  # not adapter code.
+  canonical_height: 224
+  canonical_width: 672
+  num_frames: 4
+  frame_stride: 1
+  sample_stride: 1
+  episode_cache_size: 2
+  train_fraction: 1.0
+  split_seed: 0
+  train_batch_size: 1
+  val_batch_size: 1
+  num_workers: 8
+  view_layout:
+    - source_name: observation.images.top
+      canonical_name: top
+      top: 0
+      left: 0
+      height: 224
+      width: 224
+    - source_name: observation.images.left_wrist
+      canonical_name: left_wrist
+      top: 0
+      left: 224
+      height: 224
+      width: 224
+    - source_name: observation.images.right_wrist
+      canonical_name: right_wrist
+      top: 0
+      left: 448
+      height: 224
+      width: 224
+  action_schema:
+    action_dim: 14
+    action_horizon: 32
+    state_dim: 14
+    state_horizon: 4
+  action_target:
+    representation: raw
+    source_key: action
+
+backbone:
+  implementation: shared_transformer
+  train_attn_mode: flex
+  infer_attn_mode: torch
+  hidden_size: 3072
+  num_layers: 30
+  num_heads: 24
+  attention_head_dim: 128
+  ffn_dim: 14336
+  pretrained_model_name_or_path: "${paths.models.lingbot_va_base}"
+  transformer_subdir: transformer
+  max_text_tokens: 512
+  load_wan_vae_frontend: true
+  load_text_conditioning: true
+  load_reference_core_weights: true
+  reference_core_init_mode: video_only
+  # Raw RGB is encoded online; CPU execution leaves the GPUs waiting on VAE.
+  reference_assets_device_policy: runtime
+
+policy_variant:
+  name: dual_expert
+  hidden_size: 3072
+  attach_site: post_visual_core
+  preset: fastwam_joint
+  program: joint
+  # LIBERO's `legacy_prefix_single_frame_perchunk_proprio` contract also forces
+  # `context_condition_latent_source=single_frame_condition_latent` +
+  # `require_condition_latents=true`: a precomputed extra condition-frame
+  # latent that only `lerobot_v2_latent_local`'s pre-encoded LIBERO latents
+  # supply. abc_v3 is a raw adapter with online VAE encoding (no offline
+  # latent pass), so it cannot provide that tensor -- `resolve_video_condition_
+  # latents` (models/common/video_conditioning.py) would hard-fail with
+  # "requires `condition_latents`, but the latent batch did not provide them."
+  # `sequence_contract: default` leaves `context_condition_latent_source` at
+  # its own default (`video_latents`: condition on the online-encoded video's
+  # own first frame instead), so `require_condition_latents` defaults to
+  # false. `proprio_context_mode` / `history_stream_visibility` are set
+  # explicitly below to preserve the rest of the named contract's behavior.
+  sequence_contract: default
+  proprio_context_mode: per_chunk_additive
+  history_stream_visibility: video_only
+  joint_timestep_coupling: independent
+  condition_mode: teacher_forcing_cond_video
+  video_prefix_frames: 1
+  action_expert_init_mode: video_weight_interpolate
+  num_action_layers: 30
+  action_hidden_size: 2048
+  action_ffn_dim: 8192
+  noisy_video_condition_prob: 0.5
+  use_activation_checkpointing: true
+
+action_decoder:
+  name: dual_expert_decoder
+  hidden_size: 3072
+  action_dim: 14
+  action_horizon: 32
+
+training:
+  video_num_train_timesteps: 1000
+  action_num_train_timesteps: 1000
+  video_sigma_shift: 5.0
+  action_sigma_shift: 1.0
+  use_teacher_forcing: false
+  chunk_size: 4
+  window_size: 64
+  sample_loss_weight_mode: none
+  optimizer_name: adamw
+  scheduler_name: constant_with_warmup
+  learning_rate: 1.0e-5
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  warmup_steps: 10
+  gradient_accumulation_steps: 10
+  max_grad_norm: 2.0
+  num_steps: 100000
+  text_condition_dropout_prob: 0.1
+  enabled_objectives: [action, latent]
+  latent_loss_weight: 1.0
+  action_loss_weight: 1.0
+  trainable_components: [policy_variant.action_expert, visual_tower.runtime_backbone]
+
+inference:
+  video_num_inference_steps: 20
+  action_num_inference_steps: 20
+  frame_chunk_size: 4
+  attention_window_size: 30
+  use_cache: true
+  guidance_scale: 5.0
+
+trainer:
+  max_epochs: 1
+  limit_train_batches: null
+  limit_val_batches: 0
+  log_every_n_steps: 1
+  accelerator: gpu
+  devices: 1
+  precision: bf16-mixed
+  enable_checkpointing: true
+  enable_model_summary: false
+  runtime: composable
+  batch_adapter: views
+  loop_policy: steps
+  strategy: fsdp
+  save_interval: 1000
+  max_checkpoints_to_keep: 100
+  checkpoint_mode: full_training_state
+  export_runtime_backbone: true
+  enable_jsonl_logging: true
+  enable_wandb: true
+  wandb_project: openwam-abc130k-finetune
+  wandb_mode: online

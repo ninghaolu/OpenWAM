@@ -59,6 +59,12 @@ paths:
     # manifest latent_path / video_latents_path columns.
     mixed_video_latent_root: ${paths.datasets.mixed_video_root}/latents
     mixed_video_hf_cache: ${paths.datasets.mixed_video_root}/hf_cache
+    # ABC-130k native LeRobot v3 (Parquet + MP4) roots read by the abc_v3
+    # adapter (abc_open_wam/, loaded via --extension abc_open_wam). No offline
+    # conversion or manifest preparation is required; the adapter reads
+    # meta/data/videos directly from these roots.
+    abc_root: /path/to/datasets/abc_130k_v3_train
+    abc_val_root: /path/to/datasets/abc_130k_v3_val
 
   simulators:
     # Local RoboTwin simulator checkout containing envs/ and task_config/.
